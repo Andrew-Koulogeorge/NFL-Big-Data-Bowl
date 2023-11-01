@@ -1,0 +1,34 @@
+import pandas as pd
+
+class DataLoader:
+    # Function that loads data in order ['games', 'players', 'plays', 'tracking']
+    def load_data(self):
+        frames = []
+
+        frame_names = ['games', 'players', 'plays']
+        for name in frame_names:
+            filename = "../data/" + name + ".csv"
+            df = pd.read_csv(filename)
+            frames += df
+            print("loaded " + name + " df")
+            print("shape: " + str(df.shape)) 
+            print("-----")
+        
+        print("loading tracking frames...")
+        # Load each week's data and keep track in array
+        tracking_frames = []
+        for week in range(1,10):
+            filename = "../data/tracking_week_" + str(week) + ".csv"
+            df = pd.read_csv(filename)
+            tracking_frames += [df]
+
+        # Combine into 1 frame
+        tracking_df = pd.concat(tracking_frames)
+
+        # Add to list
+        frames += tracking_df
+        print("loaded tracking frames")
+        print("shape: " + str(tracking_df.shape))
+
+        return frames
+
