@@ -61,8 +61,9 @@ def preprocess_players_df(players_df):
     # Step 1c: Handle NaN birthdates
     players_df.loc[pd.isnull(players_df['birthDate']), 'age'] = np.NaN
 
-    # Step 2: Filter variables
-    vars = ['nflId', 'heightInches', 'weight', 'age']
+    # Step 2: Filter variables (EXCLUDES AGE)
+    # vars = ['nflId', 'heightInches', 'weight', 'age']
+    vars = ['nflId', 'heightInches', 'weight']
     filtered_df = players_df[vars]
 
     return filtered_df
