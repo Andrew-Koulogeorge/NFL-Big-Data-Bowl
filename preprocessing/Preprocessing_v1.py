@@ -222,4 +222,8 @@ def preprocess_plays_df_naive_models(plays_df, games_df, include_nfl_features = 
         bins = [float('-inf'), -2, 0, 1, 2.5, 5, 10, float('inf')]
         plays_df_clean['TARGET'] = pd.cut(plays_df_full_features['TARGET'], bins = bins, labels = range(len(bins) - 1))
    
+
+    # Drop NA values
+    plays_df_clean = plays_df_clean.dropna()
+
     return plays_df_clean
