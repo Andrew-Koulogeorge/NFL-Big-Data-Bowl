@@ -190,14 +190,36 @@ def preprocess_all_df(plays_df, games_df, players_df, tracking_df):
     return clean_df
 
 # Method to preprocess plays df ONLY for naive models
-def preprocess_plays_df_naive_models(plays_df, games_df):
+def preprocess_plays_df_naive_models(plays_df, games_df, include_nfl_features = False, bin_ouput = False):
     plays_df_in_progress = preprocess_plays_df(plays_df, games_df)
 
     # One hot encode possession and defense teams
     qualitative_vars = ['defensiveTeam', 'possessionTeam']
     plays_df_ohe = pd.get_dummies(data = plays_df_in_progress, columns= qualitative_vars)
 
-    # Bin outcome variable
-    plays_df_clean = plays_df_ohe
+    # Include nfl features if desired
+    if include_nfl_features:
+        plays_df_full_features = pd.merge(plays_df_ohe, 
+                                          plays_df[['gameId','playId',
+                                                    'preSnapHomeTeamWinProbability',
+                                                    'preSnapVisitorTeamWinProbability',
+                                                    'expectedPoints']], 
+                                           on=['playId', 'gameId'], how='left')
+    else: 
+        plays_df_full_features = plays_df_ohe
 
+    # Bin outcome variable
+        # Bins:
+        # Less than -2
+        # -2 - 0 
+        # 0 - 1
+        # 1 - 2.5
+        # 2.5 - 5
+        # 5 - 10
+        # Greater than 10
+    plays_df_clean = plays_df_full_features
+    if bin_ouput:
+        bins = [float('-inf'), -2, 0, 1, 2.5, 5, 10, float('inf')]
+        plays_df_clean['TARGET'] = pd.cut(plays_df_full_features['TARGET'], bins = bins, labels = range(len(bins) - 1))
+   
     return plays_df_clean
