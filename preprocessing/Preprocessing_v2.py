@@ -118,19 +118,17 @@ def preprocess_tracking_df(plays_df_clean, games_df_clean, players_df_clean, tra
         merged_df['isDirectionLeft'] = (merged_df['playDirection'] == 'left').astype(int)
         
         # Standardize location so all moving towards right end zone
-        merged_df['X_std'] = merged_df['x']
-        merged_df.loc[merged_df['isDirectionLeft'], 'X_std'] = 120 - merged_df.loc[merged_df['isDirectionLeft'], 'x']
+        # merged_df['X_std'] = merged_df['x']
+        # merged_df.loc[merged_df['isDirectionLeft'], 'X_std'] = 120 - merged_df.loc[merged_df['isDirectionLeft'], 'x']
+        merged_df['X_std'] = np.where(merged_df['isDirectionLeft'], 120 - merged_df['x'], merged_df['x'])
         
-        merged_df['Y_std'] = merged_df['y']  # need to adjust y location so the distance to the top sideline is the same
-        merged_df.loc[merged_df['isDirectionLeft'], 'Y_std'] = 160/3 - merged_df.loc[merged_df['isDirectionLeft'], 'y']
+        merged_df['Y_std'] = np.where(merged_df['isDirectionLeft'], 160/3  - merged_df['y'], merged_df['y'])
 
         # Standardize velocity angle
-        merged_df['Dir_std'] = merged_df['dir']
-        merged_df.loc[merged_df['isDirectionLeft'], 'Dir_std'] = np.mod(180 + merged_df.loc[merged_df['isDirectionLeft']]['Dir_std'], 360)
+        merged_df['Dir_std'] = np.where(merged_df['isDirectionLeft'], np.mod(180 + merged_df['dir'], 360), merged_df['dir'])
 
         # Standardize velocity angle
-        merged_df['O_std'] = merged_df['o']
-        merged_df.loc[merged_df['isDirectionLeft'], 'O_std'] = np.mod(180 + merged_df.loc[merged_df['isDirectionLeft']]['o'], 360)
+        merged_df['O_std'] = np.where(merged_df['isDirectionLeft'], np.mod(180 + merged_df['o'], 360), merged_df['o'])
 
         # REVIEW THIS!!!!! Set direction and velocity angle of football to be same as the ball carrier
         merged_df.loc[(merged_df['club'] == 'football'),'Dir_std'] = 90
