@@ -145,22 +145,22 @@ def preprocess_tracking_df(plays_df_clean, games_df_clean, players_df_clean, tra
     merged_df = join_games_tracking_data(games_df_clean, merged_df)
 
     # STEP 2: STANDARDIZE DIRECTION
-    standardized_df = standardize_direction(merged_df)
+    merged_df = standardize_direction(merged_df)
 
     # STEP 3: ONE HOT ENCODING
     qualitative_vars = ['club']
-    standardized_ohe_df = pd.get_dummies(data = standardized_df, columns= qualitative_vars)
-    print("Old df shape:" + str(standardized_df.shape))
-    print("New df shape:" + str(standardized_ohe_df.shape))
+    merged_df = pd.get_dummies(data = merged_df, columns= qualitative_vars)
+    print("Old df shape:" + str(merged_df.shape))
+    print("New df shape:" + str(merged_df.shape))
 
     # STEP 4: DROP IRRELEVANT FEATURES
     # Drop irrelevant columns
     irrelevent_vars = ['jerseyNumber', 'displayName', 'possessionTeam', 
                     'defensiveTeam', 'playDirection', 'homeTeamAbbr',
                     'x', 'y', 'dir', 'o']
-    clean_df = standardized_ohe_df.drop(irrelevent_vars, axis = 1)
+    merged_df = merged_df.drop(irrelevent_vars, axis = 1)
     
-    return clean_df
+    return merged_df
 
 # Preprocesses all data
 def preprocess_all_df(plays_df, games_df, players_df, tracking_df):
