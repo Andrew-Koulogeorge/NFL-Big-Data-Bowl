@@ -85,7 +85,7 @@ def preprocess_tracking_df(plays_df_clean, games_df_clean, players_df_clean, tra
     
     # Helper methods to link dataframes
     def join_play_tracking_data(play_df, tracking_df):
-        merged_df = pd.merge(tracking_df, play_df[['gameId','playId','possessionTeam', 'defensiveTeam']], on=['playId', 'gameId'], how='left')
+        merged_df = pd.merge(tracking_df, play_df[['gameId','playId','possessionTeam', 'defensiveTeam', 'TARGET']], on=['playId', 'gameId'], how='left')
         print("joined plays and tracking dataframes")
         print("original tracking shape: " + str(tracking_df.shape))
         print("merged data shape: " + str(merged_df.shape))
@@ -362,6 +362,7 @@ def build_tensor_df(tracking_df_clean):
         for group_df in group_of_plays:
             game_id = group_df['gameId'].iloc[0]
             play_id = group_df['frameId'].iloc[0]
+            target = group_df['TARGET'].iloc[0]
             # Loop through every frame in that play
             frame_groups = group_df.groupby(['frameId'])
             for frame_id, frame_df in frame_groups:
@@ -374,7 +375,8 @@ def build_tensor_df(tracking_df_clean):
                     'playId': [play_id], 
                     'frameId': [frame_id], 
                     'frame_cutoff': [frame_df['frame_cutoff'].iloc[0]], 
-                    'field_tensor': [tensor]
+                    'field_tensor': [tensor],
+                    'TARGET': [target]
                 }
                 tensor_rows += [new_row]
 
@@ -405,7 +407,7 @@ def build_tensor_df(tracking_df_clean):
 
     # STEP 1: CREATE TENSOR DATAFRAME VIA BATCH PROCESSING
     tensor_df = pd.DataFrame(columns = ['gameId', 'playId', 'frameId', 
-                                    'frame_cutoff', 'field_tensor'])
+                                    'frame_cutoff', 'field_tensor', 'TARGET'])
 
     play_groups = tracking_df_clean.groupby(['gameId', 'playId'])
     batches = get_batches(play_groups, 6)
