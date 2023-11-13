@@ -361,7 +361,7 @@ def build_tensor_df(tracking_df_clean):
         # Loop through every play
         for group_df in group_of_plays:
             game_id = group_df['gameId'].iloc[0]
-            play_id = group_df['frameId'].iloc[0]
+            play_id = group_df['playId'].iloc[0]
             target = group_df['TARGET'].iloc[0]
             # Loop through every frame in that play
             frame_groups = group_df.groupby(['frameId'])
