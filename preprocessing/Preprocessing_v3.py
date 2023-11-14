@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime
 from math import floor, cos, sin, atan2, pi, radians, sqrt
 import torch
+import tensorflow as tf
 
 def preprocess_plays_df(plays_df, games_df):
     # Filter for only run plays
@@ -343,7 +344,7 @@ def build_tensor(single_frame_data, max_s, max_a, max_height, max_weight):
         # 22. PFF rating?
     
     # Convert matrix to a tensor
-    tensor = torch.from_numpy(image)
+    tensor = tf.convert_to_tensor(image, dtype=tf.float32)
     return tensor
 
 def process_batch(play_group, max_s, max_a, max_height, max_weight):
@@ -454,7 +455,7 @@ def prepare_4d_tensors(tracking_df_clean):
             frame_tensors += [tensor]
         
         # Make 4D tensor
-        play_tensor = torch.tensor(np.stack(frame_tensors, axis=0))
+        play_tensor = tf.convert_to_tensor(np.stack(frame_tensors, axis=0), dtype=tf.float32)
         tensor_list += [play_tensor]
         labels += [label]
 
