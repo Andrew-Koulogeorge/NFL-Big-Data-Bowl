@@ -189,218 +189,219 @@ def preprocess_all_df(plays_df, games_df, players_df, tracking_df):
 
     return clean_df
 
+
+# Helper function that filters tracking df before frame cutoff
+def filter_cutoff_frames(tracking_df_clean):
+    # Step 1: Get the frames where handoff or run occurs 
+    frame_cutoffs = tracking_df_clean[(tracking_df_clean['event'] == 'run') | (tracking_df_clean['event'] == 'handoff')][['gameId', 'playId', 'frameId']].drop_duplicates()
+
+    # Step 2: Handle duplicate handoffs 
+
+    # # Option A: Keep the later handoff event + drop the first one
+    # frame_cutoffs = frame_cutoffs.loc[frame_cutoffs.groupby(['gameId', 'playId'])['frameId'].idxmax()]  # keeps the max frame with a duplicate
+
+    # Option B: Drop all duplicate handoff plays
+    frame_cutoffs = frame_cutoffs.drop_duplicates(subset=['gameId', 'playId'], keep=False)
+
+    # Step 3: Rename cutoff column
+    frame_cutoffs = frame_cutoffs.rename(columns = {'frameId':'frame_cutoff'})
+
+    # Step 4: Merge cutoffs with the original dataframe 
+    tracking_df_clean = pd.merge(tracking_df_clean, frame_cutoffs, on=['gameId', 'playId'])
+
+    # Step 5: Filter tracking data before cutoff
+    print("shape before frame cutoff filter: " + str(tracking_df_clean.shape))
+    tracking_df_clean = tracking_df_clean[tracking_df_clean['frameId'] <= tracking_df_clean['frame_cutoff']]
+    print("shape after frame cutoff filter: " + str(tracking_df_clean.shape))
+
+    return tracking_df_clean
+
+# Helper function to determine if a coordinate is out of out of bounds
+def is_out_of_bounds(x, y):
+    i = int(x)
+    j = int(y)
+    return i < 0 or i > 119 or j < 0 or j > 53
+
+# NEW SCHEMA
+# Channel 0: Record position of this player
+# Channe; 1: Ball present in this cell?
+# Channel 2: % offensive players in this cell
+# Channel 3: Record defensive player ratio
+# Channel 4: Net velocity vector (x component, standardized 0-1)
+# Channel 5: Net velocity vector (y component, standardized 0-1)
+# Channel 6: Net acceleration vector (x component, standardized 0-1)
+# Channel 7: Net acceleration vector (y component, standardized 0-1)
+
+# Other channels to consider removing
+# Channel 8: Height (average, standardized 0-1)
+# Channel 9: Height (variance, standardized 0-1)
+# Channel 10: % home team in this cell
+# Channel 11: % away team in this cell
+
+# Helper function taht builds a tensor for a frame of tracking data
+def build_tensor(single_frame_data, max_s, max_a, max_height, max_weight):
+    # STEP 0: Create a blank matrix
+    image = np.zeros((120, 54, 12))
+
+    # STEP 1: Record ball location before looping through players in Channel 1
+    i = int(single_frame_data[single_frame_data['nflId'].isnull()]['X_std'])
+    j = int(single_frame_data[single_frame_data['nflId'].isnull()]['Y_std'])
+    # Make sure ball is inbounds 
+    if not is_out_of_bounds(i, j):
+        image[i, j, 1] = 1
+
+    # STEP 2: Drop football from dataframe
+    single_frame_data = single_frame_data.dropna(subset=['nflId'])
+
+    # STEP 3: Populate player channels, person by person
+    total_num_players_checked_on_field = 0
+    num_players = np.zeros((120, 54, 4))  # Depth 0 is offense channel Depth 1 is defense, depth 2 is home, depth 3 is away
+    temp_values = {}   # holds temporary values for calculating variances (0 = s, 1 = a, 2 = h, 3 = w)
+    
+    for _, row in single_frame_data.iterrows():
+        # Keep track of x and y locations of player (matrix indices)
+        i = int(row['X_std'])
+        j = int(row['Y_std'])
+        
+        # Make sure player is in the frame 
+        if is_out_of_bounds(i, j):
+            continue
+
+        # Update total number of players checked
+        total_num_players_checked_on_field += 1
+
+        # Channel 0: Record position of this player
+        image[i, j, 0] = (image[i, j, 0] * 22 + 1) / 22
+
+        # Keep track of people on offense and defense
+        if row['isOnOffense'] == 1:
+            num_players[i, j, 0] += 1  # record offensive player
+        else: 
+            num_players[i, j, 1] += 1  # record defensive player
+        total_players_in_cell = num_players[i, j, 0] + num_players[i, j, 1]
+        
+        # Channel 2: % offensive players in this cell
+        # Channel 3: Record defensive player ratio
+        image[i, j, 2] = num_players[i, j, 0] / (num_players[i, j, 0] + num_players[i, j, 1])  # calculate % offensive players at this cell
+        image[i, j, 3] = num_players[i, j, 1] / (num_players[i, j, 0] + num_players[i, j, 1])  # calculate % offensive players at this cell
+
+        # Keep track of height and other values for later computation
+        if (i, j) not in temp_values.keys():
+            temp_values[(i, j)] = {'heightInches':[],
+                                'vx': 0,
+                                'vy': 0,
+                                'fx': 0,
+                                'fy': 0}
+        temp_values[(i, j)]['heightInches'] += [row['heightInches'] / max_height]  # Channel 9: Height (variance, standardized 0-1)
+
+        # Update net velocity vector (x component, standardized 0-1)
+        temp_values[(i, j)]['vx'] += (row['s'] / max_s) * cos(radians(row['Dir_std']))
+
+        # Update net velocity vector (y component, standardized 0-1)
+        temp_values[(i, j)]['vy'] += (row['s'] / max_s) * sin(radians(row['Dir_std']))
+
+        # Update net force vector (x component, standardized 0-1)
+        temp_values[(i, j)]['fx'] += ((row['weight'] * row['a']) / (max_weight * max_a)) * cos(radians(row['O_std']))
+
+        # Update net force vector (y component, standardized 0-1)
+        temp_values[(i, j)]['fy'] += ((row['weight'] * row['a']) / (max_weight * max_a)) * sin(radians(row['O_std']))
+
+        # Keep track of people home and away
+        if row['isHomeTeam'] == 1:
+            num_players[i, j, 2] += 1  # record home team player
+        else: 
+            num_players[i, j, 3] += 1  # record away team player
+        # Update channels
+        # Channel 10: % home team in this cell
+        # Channel 11: % away team in this cell
+        image[i, j, 10] = num_players[i, j, 2] / total_players_in_cell  # calculate % home team players at this cell
+        image[i, j, 11] = num_players[i, j, 3] / total_players_in_cell  # calculate % away team players at this cell
+
+    # Compute variances 
+    for (i, j) in temp_values.keys():
+        # Get sample size:
+        n = len(temp_values[(i,j)]['heightInches'])
+
+        # Channel 4: Velocity vector (magnitude)
+        image[i, j, 4] = sqrt(temp_values[(i,j)]['vx']**2 + temp_values[(i,j)]['vy']**2) 
+
+        # Channel 5: Velocity vector (angle, standardized 0-1)
+        image[i, j, 5] = (atan2(temp_values[(i,j)]['vy'], temp_values[(i,j)]['vx']) % (2*pi)) / (2*pi) if (temp_values[(i,j)]['vy'] != 0) else 1
+
+        # Channel 6: Force vector (magnitude)
+        image[i, j, 6] = sqrt(temp_values[(i,j)]['fx']**2 + temp_values[(i,j)]['fy']**2) 
+
+        # Channel 7: Force vector (angle, standardized 0-1)
+        image[i, j, 7] = (atan2(temp_values[(i,j)]['fy'], temp_values[(i,j)]['fx']) % (2*pi)) / (2*pi) if (temp_values[(i,j)]['fy'] != 0) else 1 
+
+        # Channel 8: Height (mean, standardized 0-1)
+        image[i, j, 8] = np.mean(temp_values[(i,j)]['heightInches']) if n > 0 else 0
+        
+        # Channel 9: Height (variance, standardized 0-1)
+        image[i, j, 9] = np.var(temp_values[(i,j)]['heightInches'], ddof = 1) if n > 1 else 0
+        
+        # 22. PFF rating?
+    
+    # Convert matrix to a tensor
+    tensor = torch.from_numpy(image)
+    return tensor
+
+def process_batch(play_group, max_s, max_a, max_height, max_weight):
+    # Hold in an array (faster than concatenating a df every row)
+    tensor_rows = []
+
+    # Loop through every play
+    for group_df in play_group:
+        game_id = group_df['gameId'].iloc[0]
+        play_id = group_df['playId'].iloc[0]
+        target = group_df['TARGET'].iloc[0]
+        # Loop through every frame in that play
+        frame_groups = group_df.groupby(['frameId'])
+        for frame_id, frame_df in frame_groups:
+            # Build tensor for that frame
+            tensor = build_tensor(frame_df, max_s = max_s, max_a = max_a, max_height = max_height, max_weight = max_weight)
+            
+            # Keep track of row
+            new_row = {
+                'gameId': [game_id], 
+                'playId': [play_id], 
+                'frameId': [frame_id], 
+                'frame_cutoff': [frame_df['frame_cutoff'].iloc[0]], 
+                'field_tensor': [tensor],
+                'TARGET': [target]
+            }
+            tensor_rows += [new_row]
+
+    # Build dataframe
+    tensor_df = pd.DataFrame(tensor_rows)
+    return tensor_df
+
+def get_batches(groupby_object, num_batches):
+    # Get the keys of the groups
+    group_keys = list(groupby_object.groups.keys())
+
+    # Calculate the number of keys in each batch
+    keys_per_batch = len(group_keys) // num_batches
+
+    # Initialize an empty list to store the batches
+    batches = []
+
+    # Split the keys into batches
+    for i in range(0, len(group_keys), keys_per_batch):
+        batch_keys = group_keys[i:i + keys_per_batch]
+        batch = [groupby_object.get_group(key) for key in batch_keys]
+        batches.append(batch)
+
+    return batches
+
 # Method to create tensor dataframe
 def build_tensor_df(tracking_df_clean):
-    
-    # Helper function that filters tracking df before frame cutoff
-    def filter_cutoff_frames(tracking_df_clean):
-        # Step 1: Get the frames where handoff or run occurs 
-        frame_cutoffs = tracking_df_clean[(tracking_df_clean['event'] == 'run') | (tracking_df_clean['event'] == 'handoff')][['gameId', 'playId', 'frameId']].drop_duplicates()
-
-        # Step 2: Handle duplicate handoffs 
-
-        # # Option A: Keep the later handoff event + drop the first one
-        # frame_cutoffs = frame_cutoffs.loc[frame_cutoffs.groupby(['gameId', 'playId'])['frameId'].idxmax()]  # keeps the max frame with a duplicate
-
-        # Option B: Drop all duplicate handoff plays
-        frame_cutoffs = frame_cutoffs.drop_duplicates(subset=['gameId', 'playId'], keep=False)
-
-        # Step 3: Rename cutoff column
-        frame_cutoffs = frame_cutoffs.rename(columns = {'frameId':'frame_cutoff'})
-
-        # Step 4: Merge cutoffs with the original dataframe 
-        tracking_df_clean = pd.merge(tracking_df_clean, frame_cutoffs, on=['gameId', 'playId'])
-
-        # Step 5: Filter tracking data before cutoff
-        print("shape before frame cutoff filter: " + str(tracking_df_clean.shape))
-        tracking_df_clean = tracking_df_clean[tracking_df_clean['frameId'] <= tracking_df_clean['frame_cutoff']]
-        print("shape after frame cutoff filter: " + str(tracking_df_clean.shape))
-
-        return tracking_df_clean
-
-    # Helper function to determine if a coordinate is out of out of bounds
-    def is_out_of_bounds(x, y):
-        i = int(x)
-        j = int(y)
-        return i < 0 or i > 119 or j < 0 or j > 53
-    
     # Get max s, a, height, weight for normalization
     max_a = tracking_df_clean['a'].max()
     max_s = tracking_df_clean['s'].max()
     max_height = tracking_df_clean['heightInches'].max()   
     max_weight = tracking_df_clean['weight'].max()  
-    
-    # NEW SCHEMA
-    # Channel 0: Record position of this player
-    # Channe; 1: Ball present in this cell?
-    # Channel 2: % offensive players in this cell
-    # Channel 3: Record defensive player ratio
-    # Channel 4: Net velocity vector (x component, standardized 0-1)
-    # Channel 5: Net velocity vector (y component, standardized 0-1)
-    # Channel 6: Net acceleration vector (x component, standardized 0-1)
-    # Channel 7: Net acceleration vector (y component, standardized 0-1)
 
-    # Other channels to consider removing
-    # Channel 8: Height (average, standardized 0-1)
-    # Channel 9: Height (variance, standardized 0-1)
-    # Channel 10: % home team in this cell
-    # Channel 11: % away team in this cell
-
-    # Helper function taht builds a tensor for a frame of tracking data
-    def build_tensor(single_frame_data, max_s = max_s, max_a = max_a, max_height = max_height, max_weight = max_weight):
-        # STEP 0: Create a blank matrix
-        image = np.zeros((120, 54, 12))
-
-        # STEP 1: Record ball location before looping through players in Channel 1
-        i = int(single_frame_data[single_frame_data['nflId'].isnull()]['X_std'])
-        j = int(single_frame_data[single_frame_data['nflId'].isnull()]['Y_std'])
-        # Make sure ball is inbounds 
-        if not is_out_of_bounds(i, j):
-            image[i, j, 1] = 1
-
-        # STEP 2: Drop football from dataframe
-        single_frame_data = single_frame_data.dropna(subset=['nflId'])
-
-        # STEP 3: Populate player channels, person by person
-        total_num_players_checked_on_field = 0
-        num_players = np.zeros((120, 54, 4))  # Depth 0 is offense channel Depth 1 is defense, depth 2 is home, depth 3 is away
-        temp_values = {}   # holds temporary values for calculating variances (0 = s, 1 = a, 2 = h, 3 = w)
-        
-        for _, row in single_frame_data.iterrows():
-            # Keep track of x and y locations of player (matrix indices)
-            i = int(row['X_std'])
-            j = int(row['Y_std'])
-            
-            # Make sure player is in the frame 
-            if is_out_of_bounds(i, j):
-                continue
-
-            # Update total number of players checked
-            total_num_players_checked_on_field += 1
-
-            # Channel 0: Record position of this player
-            image[i, j, 0] = (image[i, j, 0] * 22 + 1) / 22
-
-            # Keep track of people on offense and defense
-            if row['isOnOffense'] == 1:
-                num_players[i, j, 0] += 1  # record offensive player
-            else: 
-                num_players[i, j, 1] += 1  # record defensive player
-            total_players_in_cell = num_players[i, j, 0] + num_players[i, j, 1]
-            
-            # Channel 2: % offensive players in this cell
-            # Channel 3: Record defensive player ratio
-            image[i, j, 2] = num_players[i, j, 0] / (num_players[i, j, 0] + num_players[i, j, 1])  # calculate % offensive players at this cell
-            image[i, j, 3] = num_players[i, j, 1] / (num_players[i, j, 0] + num_players[i, j, 1])  # calculate % offensive players at this cell
-
-            # Keep track of height and other values for later computation
-            if (i, j) not in temp_values.keys():
-                temp_values[(i, j)] = {'heightInches':[],
-                                    'vx': 0,
-                                    'vy': 0,
-                                    'fx': 0,
-                                    'fy': 0}
-            temp_values[(i, j)]['heightInches'] += [row['heightInches'] / max_height]  # Channel 9: Height (variance, standardized 0-1)
-
-            # Update net velocity vector (x component, standardized 0-1)
-            temp_values[(i, j)]['vx'] += (row['s'] / max_s) * cos(radians(row['Dir_std']))
-
-            # Update net velocity vector (y component, standardized 0-1)
-            temp_values[(i, j)]['vy'] += (row['s'] / max_s) * sin(radians(row['Dir_std']))
-
-            # Update net force vector (x component, standardized 0-1)
-            temp_values[(i, j)]['fx'] += ((row['weight'] * row['a']) / (max_weight * max_a)) * cos(radians(row['O_std']))
-
-            # Update net force vector (y component, standardized 0-1)
-            temp_values[(i, j)]['fy'] += ((row['weight'] * row['a']) / (max_weight * max_a)) * sin(radians(row['O_std']))
-
-            # Keep track of people home and away
-            if row['isHomeTeam'] == 1:
-                num_players[i, j, 2] += 1  # record home team player
-            else: 
-                num_players[i, j, 3] += 1  # record away team player
-            # Update channels
-            # Channel 10: % home team in this cell
-            # Channel 11: % away team in this cell
-            image[i, j, 10] = num_players[i, j, 2] / total_players_in_cell  # calculate % home team players at this cell
-            image[i, j, 11] = num_players[i, j, 3] / total_players_in_cell  # calculate % away team players at this cell
-
-        # Compute variances 
-        for (i, j) in temp_values.keys():
-            # Get sample size:
-            n = len(temp_values[(i,j)]['heightInches'])
-
-            # Channel 4: Velocity vector (magnitude)
-            image[i, j, 4] = sqrt(temp_values[(i,j)]['vx']**2 + temp_values[(i,j)]['vy']**2) 
-
-            # Channel 5: Velocity vector (angle, standardized 0-1)
-            image[i, j, 5] = (atan2(temp_values[(i,j)]['vy'], temp_values[(i,j)]['vx']) % (2*pi)) / (2*pi) if (temp_values[(i,j)]['vy'] != 0) else 1
-
-            # Channel 6: Force vector (magnitude)
-            image[i, j, 6] = sqrt(temp_values[(i,j)]['fx']**2 + temp_values[(i,j)]['fy']**2) 
-
-            # Channel 7: Force vector (angle, standardized 0-1)
-            image[i, j, 7] = (atan2(temp_values[(i,j)]['fy'], temp_values[(i,j)]['fx']) % (2*pi)) / (2*pi) if (temp_values[(i,j)]['fy'] != 0) else 1 
-
-            # Channel 8: Height (mean, standardized 0-1)
-            image[i, j, 8] = np.mean(temp_values[(i,j)]['heightInches']) if n > 0 else 0
-            
-            # Channel 9: Height (variance, standardized 0-1)
-            image[i, j, 9] = np.var(temp_values[(i,j)]['heightInches'], ddof = 1) if n > 1 else 0
-            
-            # 22. PFF rating?
-        
-        # Convert matrix to a tensor
-        tensor = torch.from_numpy(image)
-        return tensor
-
-    def process_batch(group_of_plays):
-        # Hold in an array (faster than concatenating a df every row)
-        tensor_rows = []
-
-        # Loop through every play
-        for group_df in group_of_plays:
-            game_id = group_df['gameId'].iloc[0]
-            play_id = group_df['playId'].iloc[0]
-            target = group_df['TARGET'].iloc[0]
-            # Loop through every frame in that play
-            frame_groups = group_df.groupby(['frameId'])
-            for frame_id, frame_df in frame_groups:
-                # Build tensor for that frame
-                tensor = build_tensor(frame_df)
-                
-                # Keep track of row
-                new_row = {
-                    'gameId': [game_id], 
-                    'playId': [play_id], 
-                    'frameId': [frame_id], 
-                    'frame_cutoff': [frame_df['frame_cutoff'].iloc[0]], 
-                    'field_tensor': [tensor],
-                    'TARGET': [target]
-                }
-                tensor_rows += [new_row]
-
-        # Build dataframe
-        tensor_df = pd.DataFrame(tensor_rows)
-        return tensor_df
-    
-    def get_batches(groupby_object, num_batches):
-        # Get the keys of the groups
-        group_keys = list(groupby_object.groups.keys())
-
-        # Calculate the number of keys in each batch
-        keys_per_batch = len(group_keys) // num_batches
-
-        # Initialize an empty list to store the batches
-        batches = []
-
-        # Split the keys into batches
-        for i in range(0, len(group_keys), keys_per_batch):
-            batch_keys = group_keys[i:i + keys_per_batch]
-            batch = [groupby_object.get_group(key) for key in batch_keys]
-            batches.append(batch)
-
-        return batches
 
     # STEP 0: FILTER FRAME CUTOFFS
     tracking_df_clean = filter_cutoff_frames(tracking_df_clean)
@@ -415,10 +416,50 @@ def build_tensor_df(tracking_df_clean):
     for i in range(len(batches)):
         print("processing batch " + str(i))
         batch = batches[i]
-        new_batch_df = process_batch(batch)
+        new_batch_df = process_batch(batch, max_s, max_a, max_height, max_weight)
         tensor_df = pd.concat([tensor_df, new_batch_df])
 
     return tensor_df
+
+
+# Method to build list of 4D tensors and labels
+def prepare_4d_tensors(tracking_df_clean):
+    
+    # Get max s, a, height, weight for normalization
+    max_a = tracking_df_clean['a'].max()
+    max_s = tracking_df_clean['s'].max()
+    max_height = tracking_df_clean['heightInches'].max()   
+    max_weight = tracking_df_clean['weight'].max()  
+    
+    # STEP 0: FILTER FRAME CUTOFFS
+    tracking_df_clean = filter_cutoff_frames(tracking_df_clean)
+
+    # STEP 1: CREATE LIST OF 4D TENSORS AND LABELS
+    tensor_list = []
+    labels = []
+
+    play_groups = tracking_df_clean.groupby(['gameId', 'playId'])
+    # Loop through every play
+    for (game_id, play_id), play_df in play_groups:
+        frame_tensors = []
+        # Loop through every frame in the play
+        frame_groups = play_df.groupby(['frameId'])
+        for frame_id, frame_df in frame_groups:
+            label = frame_df['TARGET'].iloc[0]
+
+            # Build tensor for that frame
+            tensor = build_tensor(frame_df, max_s = max_s, max_a = max_a, max_height = max_height, max_weight = max_weight)
+            
+            # Record tensor
+            frame_tensors += [tensor]
+        
+        # Make 4D tensor
+        play_tensor = torch.tensor(np.stack(frame_tensors, axis=0))
+        tensor_list += [play_tensor]
+        labels += [label]
+
+    return tensor_list, labels
+
 
 # Method to preprocess plays df ONLY for naive models
 def preprocess_plays_df_naive_models(plays_df, games_df, include_nfl_features = False, bin_ouput = False):
