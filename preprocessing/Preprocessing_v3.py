@@ -423,8 +423,29 @@ def build_tensor_df(tracking_df_clean):
     return tensor_df
 
 
+# Method to sample a uniform number of frames
+def uniform_frame_sampling(video_tensor, n):
+    """
+    Uniformly sample n frames from a video tensor.
+
+    Parameters:
+    - video_tensor: 4D numpy array representing the video (frames, height, width, channels).
+    - n: Number of frames to sample.
+
+    Returns:
+    - sampled_tensor: 4D numpy array with n sampled frames.
+    """
+
+    # Convert NumPy array to TensorFlow constant tensor
+    indices = tf.constant(np.linspace(0, video_tensor.shape[0] - 1, n, dtype=int), dtype=tf.int32)
+
+    # Use the calculated indices to sample frames
+    sampled_tensor = tf.gather(video_tensor, indices)
+
+    return sampled_tensor
+
 # Method to build list of 4D tensors and labels
-def prepare_4d_tensors(tracking_df_clean):
+def prepare_4d_tensors(tracking_df_clean, min_frames = None):
     
     # Get max s, a, height, weight for normalization
     max_a = tracking_df_clean['a'].max()
@@ -444,7 +465,8 @@ def prepare_4d_tensors(tracking_df_clean):
     for (game_id, play_id), play_df in play_groups:
         frame_tensors = []
         # Loop through every frame in the play
-        frame_groups = play_df.groupby(['frameId'])
+        frame_groups = play_df.groupby(['frameId']) 
+
         for frame_id, frame_df in frame_groups:
             label = frame_df['TARGET'].iloc[0]
 
@@ -456,8 +478,15 @@ def prepare_4d_tensors(tracking_df_clean):
         
         # Make 4D tensor
         play_tensor = tf.convert_to_tensor(np.stack(frame_tensors, axis=0), dtype=tf.float32)
-        tensor_list += [play_tensor]
-        labels += [label]
+        
+        # Check cutoff
+        if min_frames == None:
+            tensor_list += [play_tensor]
+            labels += [label]
+        elif play_tensor.shape[0] >= min_frames:
+            play_tensor = uniform_frame_sampling(play_tensor, min_frames)
+            tensor_list += [play_tensor]
+            labels += [label]
 
     return tensor_list, labels
 
