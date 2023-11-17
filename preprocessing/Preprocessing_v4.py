@@ -326,8 +326,8 @@ def build_tensor(single_frame_data, max_s, max_a, max_height, max_weight):
 
     # Compute variances 
     for (i, j) in temp_values.keys():
-        # Get sample size:
-        n = len(temp_values[(i,j)]['vx'])
+        # # Get sample size:
+        # n = len(temp_values[(i,j)]['vx'])
 
         # Channel 4: Velocity vector (magnitude)
         image[i, j, 4] = sqrt(temp_values[(i,j)]['vx']**2 + temp_values[(i,j)]['vy']**2) 
